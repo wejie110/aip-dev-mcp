@@ -526,21 +526,26 @@ if __name__ == "__main__":
             biz_json = json.dumps(biz, indent=4, ensure_ascii=False).replace("\n", "\r\n")
             # 生成时间戳和签名
             ts, sig = sign(method, biz_json)
-            # 发送 POST 请求到 Gateway
-            resp = http_post(
-                GATEWAY["url"],
-                {
-                    "method":    method,
-                    "sign":      sig,
-                    "sign_type": "MD5",
-                    "app_id":    GATEWAY["app_id"],
-                    "timestamp": ts,
-                    "charset":   "utf-8",
-                    "format":    "JSON",
-                    "version":   "1.0",
-                },
-                biz_json.encode()  # JSON 字符串 → UTF-8 字节
-            )
+            # 构建 form body：outer params + data=biz_json（全部走 form 编码，不用 query string）
+            # 修复：query string 对大嵌套 JSON 会截断/编码不一致，导致 timestamp=0 签名失败
+            form_body = urlencode({
+                "method":    method,
+                "sign":      sig,
+                "sign_type": "MD5",
+                "app_id":    GATEWAY["app_id"],
+                "timestamp": ts,
+                "charset":   "utf-8",
+                "format":    "JSON",
+                "version":   "1.0",
+            }).encode() + b"&" + urlencode({"data": biz_json}).encode()
+            # 发送 POST 请求到 Gateway（全部参数在 form body 中）
+            p = urlparse(GATEWAY["url"])
+            conn = HTTPConnection(p.hostname, p.port, timeout=10)
+            conn.request("POST", p.path, body=form_body,
+                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+            r = conn.getresponse()
+            resp = json.loads(r.read().decode())
+            conn.close()
             return TextContent(type="text", text=json.dumps(resp, indent=2, ensure_ascii=False)).model_dump()
     
         # ── db_schema：查询 MySQL ──
