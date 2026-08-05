@@ -33,7 +33,8 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(CONFIG_PATH) as f:
     config = yaml.safe_load(f)
 
-GATEWAY = config["gateway"]
+GATEWAY           = config["gateway"]
+STARBUCKS_GATEWAY = config.get("starbucks_gateway", {})
 CONNS   = config.get("connections", {})
 DBS     = config.get("databases", {})
 NACOS   = config.get("nacos", {})
@@ -72,6 +73,24 @@ if __name__ == "__main__":
                         "biz_content": {
                             "type": "object",
                             "description": "业务参数 JSON 对象。示例：{\"orgCode\":\"10201\",\"billNo\":\"JHDD20260624000016\"}"
+                        },
+                    },
+                    "required": ["method", "biz_content"],
+                }
+            ),
+            Tool(
+                name="starbucks_gateway_call",
+                description="调用星巴克(NGBE) Gateway 接口，自动签名。传入方法名和业务参数，返回 JSON 响应。签名算法与 AIP 一致，仅 IP/端口不同（10.18.8.157:9889）。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "description": "接口方法名。示例：sale.posConfig、nsos.getCg"
+                        },
+                        "biz_content": {
+                            "type": ["object", "array"],
+                            "description": "业务参数 JSON 对象或数组。对象示例：{\"orgCode\":\"10201\"}；数组示例：[{\"msgId\":\"xxx\",\"shopCode\":\"C00001\"}]"
                         },
                     },
                     "required": ["method", "biz_content"],
@@ -147,6 +166,9 @@ if __name__ == "__main__":
     async def call_tool(name: str, arguments: dict):
         if name == "gateway_call":
             return handle_gateway_call(arguments, GATEWAY)
+
+        elif name == "starbucks_gateway_call":
+            return handle_gateway_call(arguments, STARBUCKS_GATEWAY)
 
         elif name == "db_schema":
             return handle_db_schema(arguments, CONNS, DBS)

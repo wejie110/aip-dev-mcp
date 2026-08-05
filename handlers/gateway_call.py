@@ -55,43 +55,79 @@ def sign(gateway_config: dict, method: str, biz_json: str) -> tuple:
 
 def handle_gateway_call(arguments: dict, gateway_config: dict) -> TextContent:
     """
-    处理 gateway_call 工具调用：签名并请求 AIP Gateway，返回 JSON 响应。
+    处理 gateway_call 工具调用：签名并请求 Gateway，返回 JSON 响应。
 
     参数：
         arguments      — 工具调用参数，含 method（接口方法名）和 biz_content（业务参数 dict）
-        gateway_config — dict，包含 url / app_id / md5_key
+        gateway_config — dict，包含 url / app_id / md5_key，可选 style
 
     返回：TextContent（已序列化为 model_dump()）
     """
     method = arguments["method"]
     biz = arguments["biz_content"]
 
-    # 序列化业务参数为 JSON，使用 4 空格缩进 + \r\n 换行（与 Apifox 一致）
+    # 序列化业务参数为 JSON，使用 4 空格缩进 + \\r\\n 换行（与 Apifox 一致）
     biz_json = json.dumps(biz, indent=4, ensure_ascii=False).replace("\n", "\r\n")
 
     # 生成时间戳和签名
     ts, sig = sign(gateway_config, method, biz_json)
 
-    # 构建 form body：outer params + data=biz_json（全部走 form 编码，不用 query string）
-    # 修复：query string 对大嵌套 JSON 会截断/编码不一致，导致 timestamp=0 签名失败
-    form_body = urlencode({
-        "method":    method,
-        "sign":      sig,
-        "sign_type": "MD5",
-        "app_id":    gateway_config["app_id"],
-        "timestamp": ts,
-        "charset":   "utf-8",
-        "format":    "JSON",
-        "version":   "1.0",
-    }).encode() + b"&" + urlencode({"data": biz_json}).encode()
-
-    # 发送 POST 请求到 Gateway（全部参数在 form body 中）
     p = urlparse(gateway_config["url"])
-    conn = HTTPConnection(p.hostname, p.port, timeout=10)
-    conn.request("POST", p.path, body=form_body,
-                 headers={"Content-Type": "application/x-www-form-urlencoded"})
-    r = conn.getresponse()
-    resp = json.loads(r.read().decode())
-    conn.close()
+    style = gateway_config.get("style", "aip")
+
+    if style == "starbucks":
+        # 星巴克 Gateway：method 在 URL query string，body 走 JSON（带签名）
+        import urllib.request
+        req_url = f"{gateway_config['url']}?method={method}"
+
+        if isinstance(biz, list):
+            # 数组参数：签名参数放 URL query string，body 纯数组 JSON
+            qs_params = {
+                "sign":      sig,
+                "timestamp": ts,
+                "app_id":    gateway_config["app_id"],
+                "charset":   "utf-8",
+                "format":    "JSON",
+                "version":   "1.0",
+            }
+            qs = "&".join(f"{k}={v}" for k, v in qs_params.items())
+            req_url = f"{gateway_config['url']}?method={method}&{qs}"
+            req_body = json.dumps(biz, ensure_ascii=False).encode()
+        else:
+            # 对象参数：biz_content 字段展开到 body 顶层，与签名参数平级
+            body_dict = {
+                "sign":        sig,
+                "timestamp":   ts,
+                "app_id":      gateway_config["app_id"],
+                "charset":     "utf-8",
+                "format":      "JSON",
+                "version":     "1.0",
+            }
+            body_dict.update(biz)
+            req_body = json.dumps(body_dict, ensure_ascii=False).encode()
+
+        req = urllib.request.Request(req_url, data=req_body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            resp = json.loads(r.read().decode())
+    else:
+        # AIP Gateway：全部参数走 form body（application/x-www-form-urlencoded）
+        form_body = urlencode({
+            "method":    method,
+            "sign":      sig,
+            "sign_type": "MD5",
+            "app_id":    gateway_config["app_id"],
+            "timestamp": ts,
+            "charset":   "utf-8",
+            "format":    "JSON",
+            "version":   "1.0",
+        }).encode() + b"&" + urlencode({"data": biz_json}).encode()
+
+        conn = HTTPConnection(p.hostname, p.port, timeout=10)
+        conn.request("POST", p.path, body=form_body,
+                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+        r = conn.getresponse()
+        resp = json.loads(r.read().decode())
+        conn.close()
 
     return TextContent(type="text", text=json.dumps(resp, indent=2, ensure_ascii=False)).model_dump()
