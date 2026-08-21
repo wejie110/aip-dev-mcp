@@ -8,6 +8,7 @@ import hashlib
 import base64
 import json
 import time
+import uuid
 from urllib.parse import urlencode, urlparse
 from http.client import HTTPConnection
 from mcp.types import TextContent
@@ -76,38 +77,28 @@ def handle_gateway_call(arguments: dict, gateway_config: dict) -> TextContent:
     style = gateway_config.get("style", "aip")
 
     if style == "starbucks":
-        # 星巴克 Gateway：method 在 URL query string，body 走 JSON（带签名）
+        # 星巴克新网关 /api/V1/gatewayAction（WebConfig 拦截 /api/**）：
+        #   参数 method/app_id/sign_type/sign/timestamp/version/format/charset 全部走 URL query string，
+        #   data（业务参数 JSON）走 body，Trace-Id 走 header。签名算法不变（sign() 复用）。
+        #   验签侧 getSignCheckContentV1 去掉 sign/sign_type 后，参数集合正好等于 sign() 的签名参数集合。
         import urllib.request
-        req_url = f"{gateway_config['url']}?method={method}"
-
-        if isinstance(biz, list):
-            # 数组参数：签名参数放 URL query string，body 纯数组 JSON
-            qs_params = {
-                "sign":      sig,
-                "timestamp": ts,
-                "app_id":    gateway_config["app_id"],
-                "charset":   "utf-8",
-                "format":    "JSON",
-                "version":   "1.0",
-            }
-            qs = "&".join(f"{k}={v}" for k, v in qs_params.items())
-            req_url = f"{gateway_config['url']}?method={method}&{qs}"
-            req_body = json.dumps(biz, ensure_ascii=False).encode()
-        else:
-            # 对象参数：biz_content 字段展开到 body 顶层，与签名参数平级
-            body_dict = {
-                "sign":        sig,
-                "timestamp":   ts,
-                "app_id":      gateway_config["app_id"],
-                "charset":     "utf-8",
-                "format":      "JSON",
-                "version":     "1.0",
-            }
-            body_dict.update(biz)
-            req_body = json.dumps(body_dict, ensure_ascii=False).encode()
+        qs_params = {
+            "method":    method,
+            "app_id":    gateway_config["app_id"],
+            "sign_type": "MD5",
+            "sign":      sig,
+            "timestamp": ts,
+            "version":   "1.0",
+            "format":    "JSON",
+            "charset":   "utf-8",
+        }
+        qs = "&".join(f"{k}={v}" for k, v in qs_params.items())
+        req_url = f"{gateway_config['url']}?{qs}"
+        req_body = biz_json.encode("utf-8")
 
         req = urllib.request.Request(req_url, data=req_body,
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json",
+                                              "Trace-Id": uuid.uuid4().hex})
         with urllib.request.urlopen(req, timeout=10) as r:
             resp = json.loads(r.read().decode())
     else:
