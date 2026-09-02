@@ -1,26 +1,37 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 ===============================================================================
- AIP Dev MCP Server — AI 助手开发环境集成服务
+ AIP Dev MCP Server — AI 助手开发环境集成服务（MCP 2.0 版）
 ==============================================================================
 
- 为 AI Agent（Hermes）提供开发环境工具：
-   1. gateway_call — 调用 AIP Gateway 接口（内置 MD5 签名）
-   2. db_schema    — 查询 MySQL 数据库（表结构、配置、业务数据）
-   3. nacos_config — 查询 Nacos 配置中心（只读）
-   4. redis_query  — 查询 Redis 缓存（只读）
+ 为 AI Agent（Hermes / OpenClaw / Cursor）提供开发环境工具：
+   1. gateway_call           — 调用 AIP Gateway 接口（内置 MD5 签名）
+   2. starbucks_gateway_call — 调用星巴克(NGBE) Gateway 接口（同一签名算法）
+   3. db_schema              — 查询 MySQL 数据库（表结构、配置、业务数据）
+   4. nacos_config           — 查询 Nacos 配置中心（只读）
+   5. redis_query            — 查询 Redis 缓存（只读）
 
  目录结构：
-   server.py             ← 本文件：MCP 入口，配置加载，工具路由
+   server.py             ← 本文件：MCP 入口，配置加载，工具注册（MCP 2.0）
    config.yaml           ← 配置文件
    clients/              ← 底层客户端（MySQL / Redis / Nacos）
    handlers/             ← 工具处理函数（gateway / db / nacos / redis）
 
- 运行环境：旧版 Hermes venv（Python 3.11）
-    /home/wejie110/.hermes.wsl.bak/hermes-agent/venv/bin/python3
+ SDK 说明：
+   - 适配 MCP SDK 2.x（mcp>=2.0.0），使用新高层 API mcp.server.MCPServer
+     （@server.tool() 注册 + server.run() 启动），不再使用 1.x 的
+     @server.list_tools()/@server.call_tool() 低层装饰器。
+   - handlers/ 与 clients/ 业务层零改动：handler 仍返回
+     TextContent.model_dump() dict，由本文件 _wrap_text() 适配为
+     mcp.types.CallToolResult。
+   - 2026-09-02 由 mcp 1.29.1（venv）迁移至 mcp 2.0.0（Miniconda base）。
 
- 作者：红豆（Hermes）
- 日期：2026-06-25 / 重构 2026-07-07
+ 运行环境（Windows）：
+   C:/Users/wejie/miniconda3/python.exe -X utf8 server.py
+   （-X utf8 必须保留：config.yaml 为 UTF-8，Windows 中文系统默认 GBK 会读崩）
+
+ 作者：红豆（Hermes） + 迁移 2026-09-02
 ===============================================================================
 """
 import json
@@ -40,150 +51,101 @@ DBS     = config.get("databases", {})
 NACOS   = config.get("nacos", {})
 REDIS   = config.get("redis", {})
 
-# ── 导入 handler 函数 ─────────────────────────────────────────────────────────
+# ── 导入 handler 函数（业务层，与 1.x 版完全一致） ─────────────────────────────
 
 from handlers.gateway_call import handle_gateway_call
 from handlers.db_schema    import handle_db_schema
 from handlers.nacos_config  import handle_nacos_config
 from handlers.redis_query   import handle_redis_query
 
-# ── MCP Server ────────────────────────────────────────────────────────────────
+
+# ── MCP 2.0 Server ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import asyncio
-    from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent
+    from typing import Annotated, Literal, Union
+    from pydantic import Field
+    from mcp.server import MCPServer
+    from mcp.types import CallToolResult, TextContent
 
-    server = Server("aip-dev-mcp")
+    def _wrap_text(result: dict) -> CallToolResult:
+        """
+        handlers 返回 TextContent.model_dump() dict（{"type":"text","text":...}），
+        适配为 MCP 2.0 的 CallToolResult。
+        """
+        if isinstance(result, dict) and result.get("type") == "text":
+            return CallToolResult(content=[TextContent(type="text", text=result.get("text", ""))])
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(
+            result, indent=2, ensure_ascii=False, default=str))])
 
-    @server.list_tools()
-    async def list_tools():
-        return [
-            Tool(
-                name="gateway_call",
-                description="调用 AIP Gateway 接口，自动签名。传入方法名和业务参数，返回 JSON 响应。",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "method": {
-                            "type": "string",
-                            "description": "接口方法名。示例：nsos.getCg、rpt.shopSettleQuery"
-                        },
-                        "biz_content": {
-                            "type": "object",
-                            "description": "业务参数 JSON 对象。示例：{\"orgCode\":\"10201\",\"billNo\":\"JHDD20260624000016\"}"
-                        },
-                    },
-                    "required": ["method", "biz_content"],
-                }
-            ),
-            Tool(
-                name="starbucks_gateway_call",
-                description="调用星巴克(NGBE) Gateway 接口，自动签名。传入方法名和业务参数，返回 JSON 响应。签名算法与 AIP 一致，仅 IP/端口不同（10.18.8.157:9889）。",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "method": {
-                            "type": "string",
-                            "description": "接口方法名。示例：sale.posConfig、nsos.getCg"
-                        },
-                        "biz_content": {
-                            "type": ["object", "array"],
-                            "description": "业务参数 JSON 对象或数组。对象示例：{\"orgCode\":\"10201\"}；数组示例：[{\"msgId\":\"xxx\",\"shopCode\":\"C00001\"}]"
-                        },
-                    },
-                    "required": ["method", "biz_content"],
-                }
-            ),
-            Tool(
-                name="db_schema",
-                description="查询 MySQL 数据库（仅 SELECT）。用于查表结构、配置项、业务数据。",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "db": {
-                            "type": "string",
-                            "description": "逻辑数据库名，对应 config.yaml 中 databases 的 key。示例：aip4_nsos"
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "SQL SELECT 语句。示例：SELECT * FROM information_schema.COLUMNS WHERE TABLE_NAME='cnt'"
-                        },
-                    },
-                    "required": ["db", "query"],
-                }
-            ),
-            Tool(
-                name="nacos_config",
-                description="查询 Nacos 配置中心（只读，禁止增删改）。支持查单个配置、搜索配置、查服务实例。",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "description": "操作类型：config / search / service",
-                            "enum": ["config", "search", "service"]
-                        },
-                        "dataId": {
-                            "type": "string",
-                            "description": "配置 ID，如 aip-nsos.yml。action=config 时必填"
-                        },
-                        "group": {
-                            "type": "string",
-                            "description": "配置分组，默认 DEFAULT_GROUP",
-                            "default": "DEFAULT_GROUP"
-                        },
-                        "keyword": {
-                            "type": "string",
-                            "description": "搜索关键字。action=search 时必填"
-                        },
-                        "serviceName": {
-                            "type": "string",
-                            "description": "服务名，如 aip-nsos。action=service 时必填"
-                        },
-                    },
-                    "required": ["action"],
-                }
-            ),
-            Tool(
-                name="redis_query",
-                description="查询 Redis 缓存（只读，禁止写入）。支持 GET/HGET/HGETALL/HLEN/KEYS/SCAN 等只读命令。",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Redis 只读命令。示例：HGET aip4:intf-define shopSettleQuery"
-                        },
-                    },
-                    "required": ["command"],
-                }
-            ),
-        ]
+    server = MCPServer("aip-dev-mcp", version="2.0.0")
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict):
-        if name == "gateway_call":
-            return handle_gateway_call(arguments, GATEWAY)
+    @server.tool(
+        name="gateway_call",
+        description="调用 AIP Gateway 接口，自动签名。传入方法名和业务参数，返回 JSON 响应。",
+    )
+    def gateway_call(
+        method: Annotated[str, Field(
+            description="接口方法名。示例：nsos.getCg、rpt.shopSettleQuery")],
+        biz_content: Annotated[dict, Field(
+            description="业务参数 JSON 对象。示例：{\"orgCode\":\"10201\",\"billNo\":\"JHDD20260624000016\"}")],
+    ) -> CallToolResult:
+        return _wrap_text(handle_gateway_call(
+            {"method": method, "biz_content": biz_content}, GATEWAY))
 
-        elif name == "starbucks_gateway_call":
-            return handle_gateway_call(arguments, STARBUCKS_GATEWAY)
+    @server.tool(
+        name="starbucks_gateway_call",
+        description="调用星巴克(NGBE) Gateway 接口，自动签名。传入方法名和业务参数，返回 JSON 响应。签名算法与 AIP 一致，仅 IP/端口不同（10.18.8.157:9889）。",
+    )
+    def starbucks_gateway_call(
+        method: Annotated[str, Field(
+            description="接口方法名。示例：sale.posConfig、nsos.getCg")],
+        biz_content: Annotated[Union[dict, list], Field(
+            description="业务参数 JSON 对象或数组。对象示例：{\"orgCode\":\"10201\"}；数组示例：[{\"msgId\":\"xxx\",\"shopCode\":\"C00001\"}]")],
+    ) -> CallToolResult:
+        return _wrap_text(handle_gateway_call(
+            {"method": method, "biz_content": biz_content}, STARBUCKS_GATEWAY))
 
-        elif name == "db_schema":
-            return handle_db_schema(arguments, CONNS, DBS)
+    @server.tool(
+        name="db_schema",
+        description="查询 MySQL 数据库（仅 SELECT）。用于查表结构、配置项、业务数据。",
+    )
+    def db_schema(
+        db: Annotated[str, Field(
+            description="逻辑数据库名，对应 config.yaml 中 databases 的 key。示例：aip4_nsos")],
+        query: Annotated[str, Field(
+            description="SQL SELECT 语句。示例：SELECT * FROM information_schema.COLUMNS WHERE TABLE_NAME='cnt'")],
+    ) -> CallToolResult:
+        return _wrap_text(handle_db_schema({"db": db, "query": query}, CONNS, DBS))
 
-        elif name == "nacos_config":
-            return handle_nacos_config(arguments, NACOS)
+    @server.tool(
+        name="nacos_config",
+        description="查询 Nacos 配置中心（只读，禁止增删改）。支持查单个配置、搜索配置、查服务实例。",
+    )
+    def nacos_config(
+        action: Annotated[Literal["config", "search", "service"], Field(
+            description="操作类型：config / search / service")],
+        dataId: Annotated[str | None, Field(
+            description="配置 ID，如 aip-nsos.yml。action=config 时必填")] = None,
+        group: Annotated[str, Field(
+            description="配置分组，默认 DEFAULT_GROUP")] = "DEFAULT_GROUP",
+        keyword: Annotated[str | None, Field(
+            description="搜索关键字。action=search 时必填")] = None,
+        serviceName: Annotated[str | None, Field(
+            description="服务名，如 aip-nsos。action=service 时必填")] = None,
+    ) -> CallToolResult:
+        return _wrap_text(handle_nacos_config(
+            {"action": action, "dataId": dataId, "group": group,
+             "keyword": keyword, "serviceName": serviceName}, NACOS))
 
-        elif name == "redis_query":
-            return handle_redis_query(arguments, REDIS)
+    @server.tool(
+        name="redis_query",
+        description="查询 Redis 缓存（只读，禁止写入）。支持 GET/HGET/HGETALL/HLEN/KEYS/SCAN 等只读命令。",
+    )
+    def redis_query(
+        command: Annotated[str, Field(
+            description="Redis 只读命令。示例：HGET aip4:intf-define shopSettleQuery")],
+    ) -> CallToolResult:
+        return _wrap_text(handle_redis_query({"command": command}, REDIS))
 
-        return TextContent(type="text", text=json.dumps(
-            {"error": f"未知工具: {name}"}, ensure_ascii=False)).model_dump()
-
-    async def main():
-        async with stdio_server() as (read, write):
-            await server.run(read, write, server.create_initialization_options())
-
-    asyncio.run(main())
+    # 同步阻塞运行：stdio 传输（默认 transport="stdio"）
+    server.run()
