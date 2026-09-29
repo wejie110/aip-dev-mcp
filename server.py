@@ -25,13 +25,25 @@
    - handlers/ 与 clients/ 业务层零改动：handler 仍返回
      TextContent.model_dump() dict，由本文件 _wrap_text() 适配为
      mcp.types.CallToolResult。
-   - 2026-09-02 由 mcp 1.29.1（venv）迁移至 mcp 2.0.0（Miniconda base）。
+   - 2026-09-02 由 mcp 1.29.1 迁移至 mcp 2.x。
 
- 运行环境（Windows）：
-   C:/Users/wejie/miniconda3/python.exe -X utf8 server.py
-   （-X utf8 必须保留：config.yaml 为 UTF-8，Windows 中文系统默认 GBK 会读崩）
+ 运行环境（Windows）：必须用本仓库自带的 venv（内含 mcp 2.x），不要用其它解释器
+   C:/Users/wejie/Documents/aip-dev-mcp/venv/Scripts/python.exe -X utf8 server.py
 
- 作者：红豆（Hermes） + 迁移 2026-09-02
+   -X utf8 必须保留：config.yaml 为 UTF-8，Windows 中文系统默认 GBK，
+     不加会直接 UnicodeDecodeError 退出（2026-09-29 已复现）。
+   - 依赖版本以 venv 内实际安装为准：pip install -r requirements.txt
+
+ MCP 客户端配置（Hermes ~/.hermes/config.yaml，Windows 路径此处用正斜杠书写，
+ 写进 config.yaml 时用反斜杠同样有效）：
+   aip_dev:
+     command: /mnt/c/Windows/System32/cmd.exe
+     args:
+     - /c
+     - C:/Users/wejie/Documents/aip-dev-mcp/venv/Scripts/python.exe -X utf8
+       C:/Users/wejie/Documents/aip-dev-mcp/server.py
+
+ 作者：红豆（Hermes） + 迁移 2026-09-02 / 路径校正 2026-09-29
 ===============================================================================
 """
 import json
