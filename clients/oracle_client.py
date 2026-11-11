@@ -45,7 +45,7 @@ class Oracle:
     Oracle 客户端，仅支持 SELECT 查询。
 
     用法：
-        ora = Oracle("10.16.8.22", 1521, "hicmpyznew", "hicmpyznew", sid="rdtest", schema="HICMPYZNEW")
+        ora = Oracle("10.16.8.x", 1521, "<user>", "<password>", sid="<sid>", schema="<SCHEMA>")
         rows, truncated = ora.query("SELECT * FROM TPURSTKMAXMIN WHERE ROWNUM <= 10")
         ora.close()
     """

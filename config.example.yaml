@@ -1,0 +1,119 @@
+# AIP Dev MCP Server 配置示例
+# 复制为 config.yaml 后填入真实地址与密码；config.yaml 已在 .gitignore 中，不会入库。
+# 说明文档：doc/AIP-Dev-MCP-Server-技术方案.md
+
+gateway:
+  url: "http://10.18.8.x:9999/aip-gateway/gateway.action"
+  app_id: "951413"
+  md5_key: "xxxx"        # 从 gateway Redis aip4:app-access hash（field 951413-MD5）取
+
+# 星巴克（NGBE）Gateway
+starbucks_gateway:
+  url: "http://10.18.8.x:9889/api/V1/gatewayAction"
+  app_id: "951413"
+  md5_key: "xxxx"
+  style: "starbucks"     # method 走 URL query string，body 走 JSON
+
+# 数据库连接池（物理连接信息）
+connections:
+  main-opr-db:
+    host: "10.18.8.x"
+    port: 3306
+    user: "readonly"
+    password: "xxxx"
+
+  # 星巴克 MySQL 8（caching_sha2_password）
+  starbucks-db:
+    host: "10.18.8.x"
+    port: 3306
+    user: "readonly"
+    password: "xxxx"
+
+  # StarRocks（MySQL 协议兼容，FE 端口 9030）
+  starrocks-dataview:
+    host: "10.18.8.x"
+    port: 9030
+    user: "root"
+    password: "xxxx"
+
+  # cmp6（Oracle，走 python-oracledb thick 模式 + Instant Client 19）
+  # 地址来源：nacos aip-sbm.yml → sbm.datasource-cmp6
+  cmp6-oracle:
+    host: "10.16.8.x"
+    port: 1521
+    sid: "xxxx"          # jdbc:oracle:thin:@host:port:SID 里的 SID
+    user: "readonly"
+    password: "xxxx"
+
+# 数据库映射（逻辑名 → 物理连接 + 库名）
+# 同一个连接可以映射多个库，不同项目可以用不同的逻辑名
+databases:
+  aip4_nsos:
+    connection: main-opr-db
+    database: aip4_nsos
+  aip4_gateway:
+    connection: main-opr-db
+    database: aip4_gateway
+  main_opr_db:
+    connection: main-opr-db
+    database: main_opr_db
+  opr_all:
+    connection: main-opr-db
+    database: opr_all
+  aip4_sale:
+    connection: main-opr-db
+    database: aip4_sale
+  aip4_onsale:
+    connection: main-opr-db
+    database: aip4_onsale
+  aip4_rpt:
+    connection: main-opr-db
+    database: aip4_rpt
+  aip4_odm:
+    connection: main-opr-db
+    database: aip4_odm
+
+  # StarRocks aip-dataview
+  aip4_dataview:
+    connection: starrocks-dataview
+    database: hicommon
+
+  # 星巴克（NGBE）数据库
+  ngbe_sale:
+    connection: starbucks-db
+    database: ngbe_sale
+  ngbe_rpt:
+    connection: starbucks-db
+    database: ngbe_rpt
+  ngbe_realtime:
+    connection: starbucks-db
+    database: ngbe_realtime
+  ngbe_data:
+    connection: starbucks-db
+    database: ngbe_data
+  starbucks_main:
+    connection: starbucks-db
+    database: main_opr_db
+  starbucks_opr:
+    connection: starbucks-db
+    database: opr_all
+
+# Oracle 库映射（逻辑名 → 连接 + 默认 schema）
+oracle_databases:
+  cmp6:
+    connection: cmp6-oracle
+    schema: HICMPYZNEW
+
+# Redis 缓存（只读）
+redis:
+  host: "10.18.8.x"
+  port: 6379
+  password: "xxxx"
+  database: 0
+
+# Nacos 配置中心（只读）
+nacos:
+  url: "http://10.18.8.x:8848"
+  namespace: "aip"
+  username: "nacos"
+  password: "xxxx"
