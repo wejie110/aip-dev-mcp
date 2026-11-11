@@ -9,8 +9,9 @@
    1. gateway_call           — 调用 AIP Gateway 接口（内置 MD5 签名）
    2. starbucks_gateway_call — 调用星巴克(NGBE) Gateway 接口（同一签名算法）
    3. db_schema              — 查询 MySQL 数据库（表结构、配置、业务数据）
-   4. nacos_config           — 查询 Nacos 配置中心（只读）
-   5. redis_query            — 查询 Redis 缓存（只读）
+   4. oracle_query           — 查询 Oracle 数据库（cmp6 等，只读 SELECT）
+   5. nacos_config           — 查询 Nacos 配置中心（只读）
+   6. redis_query            — 查询 Redis 缓存（只读）
 
  目录结构：
    server.py             ← 本文件：MCP 入口，配置加载，工具注册（MCP 2.0）
@@ -49,6 +50,21 @@
 import json
 import yaml
 import os
+import sys
+
+# ── Oracle Instant Client 依赖 libaio.so.1 ───────────────────────────────────
+# ld.so 在进程启动时缓存库搜索路径，进程内改 LD_LIBRARY_PATH 不生效，
+# 因此这里做一次 re-exec，让 MCP 进程从启动起就带上 Instant Client 目录。
+_ORACLE_IC_DIR = os.environ.get(
+    "ORACLE_CLIENT_LIB_DIR", "/home/wejie/.hermes-tools-store/instantclient_19_28")
+if (os.path.isdir(_ORACLE_IC_DIR)
+        and _ORACLE_IC_DIR not in os.environ.get("LD_LIBRARY_PATH", "").split(":")
+        and not os.environ.get("_AIP_MCP_IC_REEXEC")):
+    _env = dict(os.environ)
+    _env["LD_LIBRARY_PATH"] = _ORACLE_IC_DIR + (
+        ":" + _env["LD_LIBRARY_PATH"] if _env.get("LD_LIBRARY_PATH") else "")
+    _env["_AIP_MCP_IC_REEXEC"] = "1"
+    os.execve(sys.executable, [sys.executable] + sys.argv, _env)
 
 # ── 配置加载 ──────────────────────────────────────────────────────────────────
 
@@ -60,6 +76,7 @@ GATEWAY           = config["gateway"]
 STARBUCKS_GATEWAY = config.get("starbucks_gateway", {})
 CONNS   = config.get("connections", {})
 DBS     = config.get("databases", {})
+ORACLE_DBS = config.get("oracle_databases", {})
 NACOS   = config.get("nacos", {})
 REDIS   = config.get("redis", {})
 
@@ -67,6 +84,7 @@ REDIS   = config.get("redis", {})
 
 from handlers.gateway_call import handle_gateway_call
 from handlers.db_schema    import handle_db_schema
+from handlers.oracle_query import handle_oracle_query
 from handlers.nacos_config  import handle_nacos_config
 from handlers.redis_query   import handle_redis_query
 
@@ -128,6 +146,18 @@ if __name__ == "__main__":
             description="SQL SELECT 语句。示例：SELECT * FROM information_schema.COLUMNS WHERE TABLE_NAME='cnt'")],
     ) -> CallToolResult:
         return _wrap_text(handle_db_schema({"db": db, "query": query}, CONNS, DBS))
+
+    @server.tool(
+        name="oracle_query",
+        description="查询 Oracle 数据库（cmp6 等，仅 SELECT/WITH，只读）。用于查 cmp6 业务表、核对落库结果。",
+    )
+    def oracle_query(
+        db: Annotated[str, Field(
+            description="逻辑库名，对应 config.yaml 中 oracle_databases 的 key。示例：cmp6")],
+        query: Annotated[str, Field(
+            description="SQL SELECT 语句。示例：SELECT * FROM TPURSTKMAXMIN WHERE OPRORGCODE='9190R713'")],
+    ) -> CallToolResult:
+        return _wrap_text(handle_oracle_query({"db": db, "query": query}, CONNS, ORACLE_DBS))
 
     @server.tool(
         name="nacos_config",
